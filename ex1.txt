@@ -1,0 +1,282 @@
+homework 1 causal inference
+Guillermo Filgueira
+2026-03-23
+problem 1: effect of exercise on weight loss
+p1_dag <- dagitty("dag {
+M -> E
+M -> CI
+E -> CI
+E -> WL
+CI -> WL
+}")
+coordinates(p1_dag) <- list(
+  x = c(M = 0, E = 1.2, CI = 2.4, WL = 3.6),
+  y = c(M = 1, E = 1, CI = 0, WL = 0)
+)
+plot(p1_dag)
+dag: M -> E M -> CI E -> CI E -> WL CI -> WL
+include in the model: CI
+do not include: M
+explanation: the researchers want to study the direct effect of regular exercise (E) on weight loss (WL). diet (CI)
+might also affect weight loss and is influenced by exercise. also motivation (M) could influence both E and CI.
+because we want the direct efffect, diet (CI) is a mediater on the path E -> CI -> WL, so we have to conrol for
+CI to block that path. M does not need to be in the model here, because once CI is included, the backdoor path
+through M is already blocked. i set all effect coefficients to 1 in the simulation.
+23/3/26, 21:57
+homework 1 causal inference
+file:///C:/Users/gfilg/Downloads/ex1.html
+1/12
+sim_p1 = function(n=100) {
+  M = rnorm(n)
+  E <- rnorm(n, M)
+  CI = rnorm(n, M + E)
+  WL <- rnorm(n, E + CI)
+  # correct: control for CI to get direct effect
+  correct = coef(lm(WL ~ E + CI))['E']
+  # wrong: only looking at E gives total-ish effect, not the direct one
+  wrong = coef(lm(WL ~ E))['E']
+  return(c(correct, wrong))
+}
+res1 <- replicate(1000, sim_p1())
+plot(density(res1[1,]), lwd=2, main="prob 1: direct effect E -> WL", xlab="posterior mean", x
+lim=c(0, 3))
+lines(density(res1[2,]), lwd=2, col=2)
+legend("topright", legend=c("correct (WL ~ E + CI)", "wrong (WL ~ E)"), col=c(1, 2), lwd=2)
+problem 2: education level and job
+satisfaction
+23/3/26, 21:57
+homework 1 causal inference
+file:///C:/Users/gfilg/Downloads/ex1.html
+2/12
+p2_dag <- dagitty("dag {
+CE -> EL
+CE -> JS
+EL -> F
+F -> JS
+EL -> JS
+}")
+coordinates(p2_dag) <- list(
+  x = c(CE = 0, EL = 1.2, F = 2.4, JS = 3.6),
+  y = c(CE = 1, EL = 1, F = 0, JS = 0)
+)
+plot(p2_dag)
+dag: CE -> EL CE -> JS EL -> F F -> JS EL -> JS
+include in the model: CE
+do not include: F
+explanation: here the study aims to investigate the direct effect of education level (EL) on job satisfaction (JS).
+the field of study (F) is influenced by EL and can also influence JS. cultural environments (CE) affect both EL
+and JS.
+wait the task actually says we need to estimate the total effect of education level. so F is a mediater. if we
+conrol for F we block part of the total effect we want to measure, so we MUST NOT include F in the model. CE
+is a confounder so we have to include it to block the backdoor path.
+23/3/26, 21:57
+homework 1 causal inference
+file:///C:/Users/gfilg/Downloads/ex1.html
+3/12
+f2 = function(n=100) {
+  CE <- rnorm(n)
+  EL = rnorm(n, CE)
+  F_var <- rnorm(n, EL)
+  JS = rnorm(n, CE + F_var + EL)
+  # correct: control CE only for total effect
+  correct <- coef(lm(JS ~ EL + CE))['EL']
+  # wrong: controling for F blocks part of total effect
+  wrong = coef(lm(JS ~ EL + CE + F_var))['EL']
+  return(c(correct, wrong))
+}
+sim_2 = replicate(1000, f2())
+plot(density(sim_2[1,]), lwd=2, main="prob 2: total effect EL -> JS", xlab="posterior mean")
+lines(density(sim_2[2,]), lwd=2, col=2)
+legend("topright", legend=c("correct", "wrong (with F)"), col=c(1, 2), lwd=2)
+problem 3: medication use and patient
+recovery rate
+23/3/26, 21:57
+homework 1 causal inference
+file:///C:/Users/gfilg/Downloads/ex1.html
+4/12
+(-1) Where’s the wrong model’s plot? 
+Your plotting window in almost all exercises should be adjusted. 
+p3_dag <- dagitty("dag {
+A -> SI
+A -> RR
+SI -> M
+SI -> RR
+M -> RR
+}")
+coordinates(p3_dag) <- list(
+  x = c(A = 0, SI = 1.2, M = 2.4, RR = 3.6),
+  y = c(A = 1, SI = 1, M = 0, RR = 0)
+)
+plot(p3_dag)
+dag: A -> SI A -> RR SI -> M SI -> RR M -> RR
+include in the model: SI
+optional extra control for precision: A
+explanation: aim is to examine the effect of a new medication (M) on recovery rate (RR). severity of illness (SI)
+influences M and RR. age (A) influence RR and SI.
+to asses the direct effect we must control for SI because its the actual confouder of M and RR.
+part 2 asks what happens if you control for age in the model. age is not needed for identification once SI is
+already in the model, because SI already blocks the backdoor path. but if we control for A in addition to SI, the
+estimate usually gets more precise (distribution gets narrower), because age still explains some extra variance
+in RR. so it changes precision more than the estimand.
+23/3/26, 21:57
+homework 1 causal inference
+file:///C:/Users/gfilg/Downloads/ex1.html
+5/12
+func_3 <- function(n=100) {
+  A = rnorm(n)
+  SI <- rnorm(n, A)
+  M = rnorm(n, SI)
+  RR <- rnorm(n, SI + A + M)
+  # model with SI
+  model_si <- coef(lm(RR ~ M + SI))['M']
+  # model with SI and Age
+  model_age = coef(lm(RR ~ M + SI + A))['M']
+  return(c(model_si, model_age))
+}
+sim3 <- replicate(1000, func_3())
+plot(density(sim3[1,]), lwd=2, main="prob 3: controling SI vs SI+Age", xlab="posterior mean")
+lines(density(sim3[2,]), lwd=2, col=4)
+legend("topright", legend=c("only SI", "SI and Age (narrower)") , col=c(1, 4), lwd=2)
+problem 4: advertising and sales
+23/3/26, 21:57
+homework 1 causal inference
+file:///C:/Users/gfilg/Downloads/ex1.html
+6/12
+p4_dag <- dagitty("dag {
+EC -> B
+EC -> S
+B -> A
+Q -> S
+Q -> A
+A -> S
+}")
+coordinates(p4_dag) <- list(
+  x = c(EC = 0, B = 1.2, Q = 1.2, A = 2.4, S = 3.6),
+  y = c(EC = 1, B = 1.6, Q = 0.4, A = 1, S = 1)
+)
+plot(p4_dag)
+dag: EC -> B EC -> S B -> A Q -> S Q -> A A -> S
+include in the model: Q and EC
+(or Q and B also works)
+explanation: we want to evaluate the effect of advertising (A) on sales (S). economic climate (EC) influence
+budget (B) and S. quality (Q) affect S and A.
+to estimate the total effect of A on S we have to close all backdoors. the paths are A <- Q -> S and A <- B <- EC
+-> S. so we must control for quality (Q). and to block the economic path we can control for budget (B) or
+economic climate (EC). i will control for EC in the code.
+23/3/26, 21:57
+homework 1 causal inference
+file:///C:/Users/gfilg/Downloads/ex1.html
+7/12
+sim_p4 = function(n=100) {
+  EC <- rnorm(n)
+  B = rnorm(n, EC)
+  Q <- rnorm(n)
+  A = rnorm(n, B + Q)
+  S <- rnorm(n, A + Q + EC)
+  # correct: control Q and EC
+  correct = coef(lm(S ~ A + Q + EC))['A']
+  # wrong: forget to control Q
+  wrong <- coef(lm(S ~ A + EC))['A']
+  return(c(correct, wrong))
+}
+res4 = replicate(1000, sim_p4())
+plot(density(res4[1,]), lwd=2, main="prob 4: total effect A -> S", xlab="posterior mean")
+lines(density(res4[2,]), lwd=2, col=2)
+legend("topleft", legend=c("correct", "wrong"), col=c(1, 2), lwd=2)
+problem 5: social media use and mental
+health
+23/3/26, 21:57
+homework 1 causal inference
+file:///C:/Users/gfilg/Downloads/ex1.html
+8/12
+p5_dag <- dagitty("dag {
+OSN -> SM
+OSN -> MH
+PI -> SM
+SM -> MH
+}")
+coordinates(p5_dag) <- list(
+  x = c(OSN = 0, PI = 0, SM = 2, MH = 3.6),
+  y = c(OSN = 1.5, PI = 0.5, SM = 1, MH = 1)
+)
+plot(p5_dag)
+dag: OSN -> SM OSN -> MH PI -> SM SM -> MH
+include in the model: OSN
+do not include: PI
+explanation: studying relationship between social media (SM) and mental health (MH). hours spent could
+directly affect mental health. offline network (OSN) influence both. personal interests (PI) lead to different SM
+use.
+to get the direct effect we must conrol for OSN because it is a confounder.
+part 2 wants us to show why we dont want include personal interests in the model. PI only influences SM, so it
+works like an instrumental / precision parasite variable here. including it does not fix bias, because there is no
+backdoor through PI. it mostly makes the estimate less precise. so in the plot below the mean stays about the
+same, but the distribution with PI is wider.
+23/3/26, 21:57
+homework 1 causal inference
+file:///C:/Users/gfilg/Downloads/ex1.html
+9/12
+f5 <- function(n=100) {
+  OSN = rnorm(n)
+  PI = rnorm(n)
+  SM <- rnorm(n, OSN + PI)
+  MH <- rnorm(n, OSN + SM)
+  # correct: control OSN only
+  correct <- coef(lm(MH ~ SM + OSN))['SM']
+  # not needed: adding PI mostly hurts precision
+  wrong <- coef(lm(MH ~ SM + OSN + PI))['SM']
+  return(c(correct, wrong))
+}
+sim5 <- replicate(1000, f5())
+plot(density(sim5[1,]), lwd=2, main="prob 5: SM -> MH", xlab="posterior mean", xlim=range(sim
+5))
+lines(density(sim5[2,]), lwd=2, col=2)
+legend("topright", legend=c("correct (no PI)", "with PI, wider") , col=c(1, 2), lwd=2)
+problem 6: pesticide exposure and health
+outcomes
+23/3/26, 21:57
+homework 1 causal inference
+file:///C:/Users/gfilg/Downloads/ex1.html
+10/12
+p6_dag <- dagitty("dag {
+D -> PE
+D -> HC
+PE -> HC
+HC -> US
+}")
+coordinates(p6_dag) <- list(
+  x = c(D = 0, PE = 1.5, HC = 3, US = 4.2),
+  y = c(D = 1, PE = 1, HC = 1, US = 0)
+)
+plot(p6_dag)
+dag: D -> PE D -> HC PE -> HC HC -> US
+include in the model: D
+do not include: US
+explanation: researchers studying effect of pesticide exposure (PE) on health condition (HC). diet (D) influence
+PE and HC. sunscreen (US) is used because HC makes skin sensitive.
+to estimate the direct effect we have to control for diet (D) because it is a confouder. we must exclude
+sunscreen (US). US is a descendant of the outcome HC, so it is a post-treatment bad control and i dont want it
+in the model.
+23/3/26, 21:57
+homework 1 causal inference
+file:///C:/Users/gfilg/Downloads/ex1.html
+11/12
+(-0.5) DAG is wrong. Scenario says D inﬂuences both PE and HC, independently. 
+sim_p6 <- function(n=100) {
+  D = rnorm(n)
+  PE = rnorm(n, D)
+  HC <- rnorm(n, PE + D)
+  US <- rnorm(n, HC)
+  # correct: control D, exclude US
+  correct = coef(lm(HC ~ PE + D))['PE']
+  # wrong: controlling descendant US
+  wrong = coef(lm(HC ~ PE + D + US))['PE']
+  return(c(correct, wrong))
+}
+res6 = replicate(1000, sim_p6())
+plot(density(res6[1,]), lwd=2, main="prob 6: direct effect PE -> HC", xlab="posterior mean")
+lines(density(res6[2,]), lwd=2, col=2)
+legend("topright", legend=c("correct", "wrong (with US)"), col=c(1, 2), lwd=2)
+23/3/26, 21:57
+homework 1 causal inference
+file:///C:/Users/gfilg/Downloads/ex1.html
+12/12
