@@ -1,0 +1,374 @@
+---
+title: "Homework 3 Solutions"
+author: "Master Student"
+date: "May 2026"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    number_sections: false
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  warning = FALSE,
+  message = FALSE,
+  cache = TRUE
+)
+library(rethinking)
+
+set.seed(202605)
+
+# Posterior summary helper used below
+post_summary <- function(fit, pars, prob = 0.89) {
+  post <- extract.samples(fit)
+  alpha <- (1 - prob) / 2
+  data.frame(
+    parameter = pars,
+    mean = sapply(pars, function(x) mean(post[[x]])),
+    sd = sapply(pars, function(x) sd(post[[x]])),
+    lo = sapply(pars, function(x) quantile(post[[x]], alpha)),
+    hi = sapply(pars, function(x) quantile(post[[x]], 1 - alpha)),
+    row.names = NULL
+  )
+}
+
+# Treatment-effect summary helper for the Trolley models
+trt_summary <- function(fit, model_name, pars = c("bA", "bI", "bC", "bIA", "bIC")) {
+  out <- post_summary(fit, pars)
+  out$model <- model_name
+  out$abs_mean <- abs(out$mean)
+  out$rank_abs_mean <- rank(-out$abs_mean, ties.method = "min")
+  out[, c("model", "parameter", "mean", "sd", "lo", "hi", "abs_mean", "rank_abs_mean")]
+}
+```
+
+## Problem 1
+
+The prior and likelihood are deliberately in conflict: the single observation is `y = 0`, while the prior location for `mu` is 10. The important issue is tail thickness. Normal distributions have thin tails and therefore force a compromise; Student-t distributions with 2 degrees of freedom have heavy tails and can treat one side of the conflict as an extreme but still plausible value.
+
+I estimate the four one-observation posteriors with a dense grid. This is faster and more reliable than MCMC here, especially for the TT model, because the posterior can be bimodal.
+
+```{r p1_grid}
+y <- 0
+mu_grid <- seq(-5, 15, length.out = 4001)
+
+post_grid <- function(likelihood = c("normal", "student"),
+                      prior = c("normal", "student")) {
+  likelihood <- match.arg(likelihood)
+  prior <- match.arg(prior)
+  log_lik <- if (likelihood == "normal") {
+    dnorm(y, mu_grid, 1, log = TRUE)
+  } else {
+    dt((y - mu_grid) / 1, df = 2, log = TRUE) - log(1)
+  }
+  log_prior <- if (prior == "normal") {
+    dnorm(mu_grid, 10, 1, log = TRUE)
+  } else {
+    dt((mu_grid - 10) / 1, df = 2, log = TRUE) - log(1)
+  }
+  log_post <- log_lik + log_prior
+  p <- exp(log_post - max(log_post))
+  p <- p / sum(p)
+  p
+}
+
+p_NN <- post_grid("normal", "normal")
+p_TN <- post_grid("student", "normal")
+p_NT <- post_grid("normal", "student")
+p_TT <- post_grid("student", "student")
+
+p1_summary <- function(p, model) {
+  cdf <- cumsum(p)
+  data.frame(
+    model = model,
+    mean = sum(mu_grid * p),
+    sd = sqrt(sum((mu_grid - sum(mu_grid * p))^2 * p)),
+    q05.5 = mu_grid[which(cdf >= 0.055)[1]],
+    q94.5 = mu_grid[which(cdf >= 0.945)[1]],
+    mode = mu_grid[which.max(p)]
+  )
+}
+
+rbind(
+  p1_summary(p_NN, "NN: normal likelihood, normal prior"),
+  p1_summary(p_TN, "TN: Student likelihood, normal prior"),
+  p1_summary(p_NT, "NT: normal likelihood, Student prior"),
+  p1_summary(p_TT, "TT: Student likelihood, Student prior")
+)
+
+plot(mu_grid, p_NN, type = "l", lwd = 2, xlab = expression(mu), ylab = "posterior density (scaled)")
+lines(mu_grid, p_TN, lwd = 2, lty = 2)
+lines(mu_grid, p_NT, lwd = 2, lty = 3)
+lines(mu_grid, p_TT, lwd = 2, lty = 4)
+legend("topright", legend = c("NN", "TN", "NT", "TT"), lty = 1:4, lwd = 2, bty = "n")
+```
+
+**Interpretation.**
+
+In **NN**, both likelihood and prior are thin-tailed, so the posterior is a compromise between `y = 0` and prior mean 10. With equal normal standard deviations, it is centered near 5.
+
+In **TN**, the likelihood is Student-t. The model can regard `y = 0` as a tail event under values of `mu` near 10, so the normal prior dominates and the posterior stays near 10.
+
+In **NT**, the prior is Student-t. The prior can regard values of `mu` near 0 as tail events under a distribution centered at 10, while the normal likelihood is thin-tailed and strongly favors `mu` near the data. The posterior therefore moves close to 0.
+
+In **TT**, both sides have heavy tails. The posterior has two important regions, one near the observation and one near the prior location. The table reports the first numerical mode it finds, but the posterior is essentially symmetric and has another mode near the prior location. This is why a simple MCMC fit can be harder to diagnose for this model: a chain can spend a long time in only one of the posterior regions.
+
+## Problem 2
+
+The response is ordinal, from 1 to 7. I compare the ordinary ordinal regression model with a varying-intercept model for participants. The varying participant effects use a non-centered parameterization. I read the course-provided `Trolley.csv` file directly, so the CSV must be in the same folder as this Rmd when knitting.
+
+```{r p2_data}
+d <- read.csv("Trolley.csv", stringsAsFactors = FALSE)
+
+dat <- list(
+  R = d$response,
+  A = d$action,
+  I = d$intention,
+  C = d$contact,
+  Sid = coerce_index(d$story),
+  id = coerce_index(d$id),
+  N_id = length(unique(d$id)),
+  N_story = length(unique(d$story))
+)
+
+c(n_rows = nrow(d), n_id = dat$N_id, n_story = dat$N_story)
+str(dat)
+```
+
+```{r p2_base_model}
+m2_base <- ulam(
+  alist(
+    R ~ dordlogit(phi, cutpoints),
+    phi <- bA*A + bC*C + BI*I,
+    BI <- bI + bIA*A + bIC*C,
+    c(bA, bI, bC, bIA, bIC) ~ dnorm(0, 0.5),
+    cutpoints ~ dnorm(0, 1.5)
+  ),
+  data = dat,
+  chains = 4,
+  cores = 4,
+  log_lik = TRUE,
+  refresh = 0
+)
+```
+
+```{r p2_id_model}
+m2_id <- ulam(
+  alist(
+    R ~ dordlogit(phi, cutpoints),
+    phi <- bA*A + bC*C + BI*I + a_id[id],
+    BI <- bI + bIA*A + bIC*C,
+
+    # non-centered participant intercepts
+    transpars> vector[N_id]:a_id <<- z_id * sigma_id,
+    vector[N_id]:z_id ~ dnorm(0, 1),
+    sigma_id ~ dexp(1),
+
+    c(bA, bI, bC, bIA, bIC) ~ dnorm(0, 0.5),
+    cutpoints ~ dnorm(0, 1.5)
+  ),
+  data = dat,
+  chains = 4,
+  cores = 4,
+  log_lik = TRUE,
+  refresh = 0
+)
+```
+
+```{r p2_compare}
+compare(m2_base, m2_id, func = WAIC)
+
+p2_effects <- rbind(
+  trt_summary(m2_base, "no varying intercepts"),
+  trt_summary(m2_id, "participant varying intercepts")
+)
+# This table gives the requested posterior means and SDs for the treatment effects.
+p2_effects[order(p2_effects$model, p2_effects$rank_abs_mean), ]
+
+# A compact side-by-side view of how the treatment-effect means and SDs change.
+p2_base_eff <- p2_effects[p2_effects$model == "no varying intercepts", c("parameter", "mean", "sd")]
+p2_id_eff <- p2_effects[p2_effects$model == "participant varying intercepts", c("parameter", "mean", "sd")]
+p2_change <- merge(p2_base_eff, p2_id_eff, by = "parameter", suffixes = c("_base", "_id"))
+p2_change$mean_change_id_minus_base <- p2_change$mean_id - p2_change$mean_base
+p2_change$sd_change_id_minus_base <- p2_change$sd_id - p2_change$sd_base
+p2_change
+
+post_summary(m2_id, "sigma_id")
+```
+
+**Interpretation.**
+
+The model with participant varying intercepts should have much better expected out-of-sample performance by WAIC. The parameter `sigma_id` measures how much baseline response tendency varies across people. If it is clearly above zero, then some participants are consistently more permissive or more restrictive than others, regardless of the treatment type.
+
+The fixed treatment coefficients should be compared with the tables above. The first table reports the requested posterior means and standard deviations for `bA`, `bI`, `bC`, `bIA`, and `bIC` under both models. The second table makes the differences explicit. In these results, including participant intercepts makes the treatment-effect means more negative in magnitude while leaving their posterior SDs broadly similar. This happens because the model separates stable person-to-person differences in baseline response tendency from the ordinary treatment terms. The important substantive point is that individual differences are not a nuisance detail in these data; they are a major source of response variation.
+
+## Problem 3
+
+Now I add a second varying intercept for story. This is a cross-classified model, because responses are simultaneously clustered by participant and by story. The participant and story effects are both non-centered.
+
+```{r p3_cross_model}
+m3_id_story <- ulam(
+  alist(
+    R ~ dordlogit(phi, cutpoints),
+    phi <- bA*A + bC*C + BI*I + a_id[id] + a_story[Sid],
+    BI <- bI + bIA*A + bIC*C,
+
+    # non-centered participant intercepts
+    transpars> vector[N_id]:a_id <<- z_id * sigma_id,
+    vector[N_id]:z_id ~ dnorm(0, 1),
+    sigma_id ~ dexp(1),
+
+    # non-centered story intercepts
+    transpars> vector[N_story]:a_story <<- z_story * sigma_story,
+    vector[N_story]:z_story ~ dnorm(0, 1),
+    sigma_story ~ dexp(1),
+
+    c(bA, bI, bC, bIA, bIC) ~ dnorm(0, 0.5),
+    cutpoints ~ dnorm(0, 1.5)
+  ),
+  data = dat,
+  chains = 4,
+  cores = 4,
+  log_lik = TRUE,
+  refresh = 0
+)
+```
+
+```{r p3_compare}
+compare(m2_base, m2_id, m3_id_story, func = WAIC)
+
+p3_effects <- rbind(
+  trt_summary(m2_base, "no varying intercepts"),
+  trt_summary(m2_id, "participant varying intercepts"),
+  trt_summary(m3_id_story, "participant + story varying intercepts")
+)
+p3_effects[order(p3_effects$model, p3_effects$rank_abs_mean), ]
+
+post_summary(m3_id_story, c("sigma_id", "sigma_story"))
+```
+
+**Interpretation.**
+
+If `sigma_story` is clearly above zero and WAIC improves after adding story intercepts, then different narrative vignettes shift the baseline level of moral approval. That is plausible: even with the same action, intention, and contact labels, some stories can sound more or less acceptable.
+
+In these results, the rank order of the absolute treatment coefficients is **not fully constant** after adding story intercepts. Without story intercepts, the largest effects are `bIC`, then `bA`, then `bIA`, then `bC`, then `bI`. With participant and story intercepts, the order becomes `bIC`, then `bC`, then `bA`, then `bIA`, then `bI`. This change is plausible because the treatment indicators are not perfectly separated from story content. Some treatment combinations appear in particular narrative contexts, so ignoring story can partially mix treatment effects with baseline differences among stories.
+
+## Problem 4
+
+The `Primates301.csv` data include body mass measurements for 238 species after dropping species with missing body mass. Among these 238 species, 56 brain measurements are missing. I read the course-provided CSV file directly, so the CSV must be in the same folder as this Rmd when knitting. First I inspect whether missing brain values are associated with body mass.
+
+```{r p4_data_explore}
+primates <- read.csv("Primates301.csv", stringsAsFactors = FALSE)
+d4 <- primates[!is.na(primates$body), ]
+d4$brain_missing <- is.na(d4$brain)
+
+nrow(d4)
+sum(d4$brain_missing)
+
+table(d4$brain_missing)
+
+boxplot(
+  log(body) ~ brain_missing,
+  data = d4,
+  xlab = "Brain size missing?",
+  ylab = "log body mass",
+  names = c("observed", "missing")
+)
+
+stripchart(
+  log(body) ~ brain_missing,
+  data = d4,
+  vertical = TRUE,
+  method = "jitter",
+  add = TRUE,
+  pch = 16
+)
+```
+
+A simple DAG for the missingness pattern is:
+
+```text
+body mass  ---->  brain size
+    |
+    v
+brain-size missingness  ---->  observed brain variable
+```
+
+The visible pattern is not MCAR, because the probability that brain size is missing appears to vary with body mass. Under the DAG above, the missingness is **MAR conditional on body mass**: missingness depends on an observed variable, body mass. It would be MNAR only if missingness also depended directly on the unobserved true brain size after conditioning on body mass; that is possible in principle, but it is not identified from these data alone.
+
+Now I compare a complete-case model with a model that imputes the missing brain sizes. To keep the two analyses comparable, I scale body mass using the maximum body mass in the 238-species body-observed subset, and I scale brain size using the maximum observed brain size.
+
+```{r p4_models}
+B_all <- d4$brain / max(d4$brain, na.rm = TRUE)
+M_all <- d4$body / max(d4$body, na.rm = TRUE)
+miss_B <- is.na(B_all)
+
+# Complete-case model
+m4_cc <- ulam(
+  alist(
+    B ~ dlnorm(mu, sigma),
+    mu <- a + b*log(M),
+    a ~ dnorm(0, 1),
+    b ~ dnorm(0, 1),
+    sigma ~ dexp(1)
+  ),
+  data = list(B = B_all[!miss_B], M = M_all[!miss_B]),
+  chains = 4,
+  cores = 4,
+  refresh = 0
+)
+
+# Missing-outcome imputation model
+m4_imp <- ulam(
+  alist(
+    B ~ dlnorm(mu, sigma),
+    mu <- a + b*log(M),
+    a ~ dnorm(0, 1),
+    b ~ dnorm(0, 1),
+    sigma ~ dexp(1)
+  ),
+  data = list(B = B_all, M = M_all),
+  chains = 4,
+  cores = 4,
+  start = list(B_impute = rep(0.5, sum(miss_B))),
+  refresh = 0
+)
+
+rbind(
+  cbind(model = "complete cases", post_summary(m4_cc, c("a", "b", "sigma"))),
+  cbind(model = "brain imputed", post_summary(m4_imp, c("a", "b", "sigma")))
+)
+```
+
+```{r p4_imputed_plot}
+post_imp <- extract.samples(m4_imp)
+B_imp_mean <- apply(post_imp$B_impute, 2, mean)
+B_imp_PI <- apply(post_imp$B_impute, 2, PI)
+
+plot(
+  log(M_all[!miss_B]), B_all[!miss_B],
+  pch = 16,
+  xlab = "log scaled body mass",
+  ylab = "scaled brain size",
+  main = "Observed and imputed brain sizes",
+  ylim = range(c(B_all[!miss_B], B_imp_PI), na.rm = TRUE)
+)
+points(log(M_all[miss_B]), B_imp_mean, pch = 1, lwd = 2)
+for (i in seq_along(B_imp_mean)) {
+  lines(rep(log(M_all[miss_B][i]), 2), B_imp_PI[, i])
+}
+legend(
+  "topleft",
+  legend = c("observed", "imputed posterior mean + interval"),
+  pch = c(16, 1),
+  bty = "n"
+)
+```
+
+**Interpretation.**
+
+The complete-case model drops all species with missing brain values. Since missing brain values are concentrated in a particular range of body masses, this deletion changes the density of the data used to estimate the body--brain relationship. The imputation model keeps those species in the likelihood by treating their brain sizes as unknown parameters constrained by the lognormal body--brain relationship.
+
+In this run, the slope `b` and residual scale `sigma` change very little between the complete-case and imputation models. That makes sense because the observed body--brain relationship is strong and many of the missing brain values occur in body-mass ranges where there are already observed species. The key difference is still conceptual: the imputation model propagates uncertainty about the missing brain sizes instead of pretending that those species do not exist. The imputed-value plot is useful because it shows where the missing cases sit relative to the observed body--brain relationship.
