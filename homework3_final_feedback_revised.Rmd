@@ -1,6 +1,6 @@
 ---
-title: "Homework 3 Solutions"
-author: "Master Student"
+title: "Homework "
+author: "Guillermo Filgueira"
 date: "May 2026"
 output:
   html_document:
@@ -46,9 +46,9 @@ trt_summary <- function(fit, model_name, pars = c("bA", "bI", "bC", "bIA", "bIC"
 
 ## Problem 1
 
-The prior and likelihood are deliberately in conflict: the single observation is `y = 0`, while the prior location for `mu` is 10. The important issue is tail thickness. Normal distributions have thin tails and therefore force a compromise; Student-t distributions with 2 degrees of freedom have heavy tails and can treat one side of the conflict as an extreme but still plausible value.
+The prior and likelihood are deliberately in conflict: the single observation is y = 0, while the prior location for `mu` is 10. The important issue is tail thickness. Normal distributions have thin tails and therefore force a compromiseStudent-t distributions with 2 degrees of freedom have heavy tails and can treat one side of the conflict as an extreme but still plausible value.
 
-I estimate the four one-observation posteriors with a dense grid. This is faster and more reliable than MCMC here, especially for the TT model, because the posterior can be bimodal.
+I estimate the four oneobservation posteriors with a dense grid. This is faster and more reliable than MCMC here, especially for the TT model, because the posterior can be bimodal.
 
 ```{r p1_grid}
 y <- 0
@@ -107,13 +107,13 @@ legend("topright", legend = c("NN", "TN", "NT", "TT"), lty = 1:4, lwd = 2, bty =
 
 **Interpretation.**
 
-In **NN**, both likelihood and prior are thin-tailed, so the posterior is a compromise between `y = 0` and prior mean 10. With equal normal standard deviations, it is centered near 5.
+In NN, both likelihood and prior are thin-tailed, so the posterior is a compromise between `y = 0` and prior mean 10. With equal normal standard deviations, it is centered near 5.
 
 In **TN**, the likelihood is Student-t. The model can regard `y = 0` as a tail event under values of `mu` near 10, so the normal prior dominates and the posterior stays near 10.
 
-In **NT**, the prior is Student-t. The prior can regard values of `mu` near 0 as tail events under a distribution centered at 10, while the normal likelihood is thin-tailed and strongly favors `mu` near the data. The posterior therefore moves close to 0.
+In NTthe prior is Student-t. The prior can regard values of `mu` near 0 as tail events under a distribution centered at 10, while the normal likelihood is thin-tailed and strongly favors `mu` near the data. The posterior therefore moves close to 0.
 
-In **TT**, both sides have heavy tails. The posterior has two important regions, one near the observation and one near the prior location. The table reports the first numerical mode it finds, but the posterior is essentially symmetric and has another mode near the prior location. This is why a simple MCMC fit can be harder to diagnose for this model: a chain can spend a long time in only one of the posterior regions.
+In **TT**,both sides have heavy tails. The posterior has two important regions, one near the observation and one near the prior location. The table reports the first numerical mode it finds, but the posterior is essentially symmetric and has another mode near the prior location. This is why a simple MCMC fit can be harder to diagnose for this model: a chain can spend a long time in only one of the posterior regions.
 
 ## Problem 2
 
@@ -296,7 +296,7 @@ body mass  ---->  brain size
 brain-size missingness  ---->  observed brain variable
 ```
 
-The visible pattern is not MCAR, because the probability that brain size is missing appears to vary with body mass. Under the DAG above, the missingness is **MAR conditional on body mass**: missingness depends on an observed variable, body mass. It would be MNAR only if missingness also depended directly on the unobserved true brain size after conditioning on body mass; that is possible in principle, but it is not identified from these data alone.
+The visible pattern is not MCAR, because the probability that brain size is missing appears to vary with body mass. Under the DAG above, the missingness isMAR conditional on body mass missingness depends on an observed variable, body mass. It would be MNAR only if missingness also depended directly on the unobserved true brain size after conditioning on body mass; that is possible in principle, but it is not identified from these data alone.
 
 Now I compare a complete-case model with a model that imputes the missing brain sizes. To keep the two analyses comparable, I scale body mass using the maximum body mass in the 238-species body-observed subset, and I scale brain size using the maximum observed brain size.
 
@@ -369,6 +369,6 @@ legend(
 
 **Interpretation.**
 
-The complete-case model drops all species with missing brain values. Since missing brain values are concentrated in a particular range of body masses, this deletion changes the density of the data used to estimate the body--brain relationship. The imputation model keeps those species in the likelihood by treating their brain sizes as unknown parameters constrained by the lognormal body--brain relationship.
+The completecase model drops all species with missing brain values. Since missing brain values are concentrated in a particular range of body masses, this deletion changes the density of the data used to estimate the body--brain relationship. The imputation model keeps those species in the likelihood by treating their brain sizes as unknown parameters constrained by the lognormal body--brain relationship.
 
-In this run, the slope `b` and residual scale `sigma` change very little between the complete-case and imputation models. That makes sense because the observed body--brain relationship is strong and many of the missing brain values occur in body-mass ranges where there are already observed species. The key difference is still conceptual: the imputation model propagates uncertainty about the missing brain sizes instead of pretending that those species do not exist. The imputed-value plot is useful because it shows where the missing cases sit relative to the observed body--brain relationship.
+In this run, the slope `b` and residual scale `sigma` change very little between the complete-case and imputation models. That makes sense because the observed bodybrain relationship is strong and many of the missing brain values occur in body-mass ranges where there are already observed species. The key difference is still conceptual: the imputation model propagates uncertainty about the missing brain sizes instead of pretending that those species do not exist. The imputed-value plot is useful because it shows where the missing cases sit relative to the observed body-brain relationship.
